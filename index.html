@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Build Triage · CI 日志诊断</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #0d1421;
+      --panel: #151f30;
+      --border: #334158;
+      --text: #ecf2fa;
+      --muted: #a7b7cc;
+      --accent: #8be3c0;
+      font: 16px/1.6 system-ui, sans-serif;
+      background: var(--background);
+      color: var(--text);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(920px, calc(100% - 32px)); margin: 48px auto; }
+    header { margin-bottom: 24px; }
+    h1 { font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1.1; letter-spacing: -.04em; margin: 8px 0; }
+    h2 { margin: 0; font-size: 1.35rem; }
+    h3 { margin: 20px 0 4px; font-size: 1rem; }
+    p { margin: 4px 0; }
+    .eyebrow { color: var(--accent); font-weight: 650; letter-spacing: .07em; }
+    .muted { color: var(--muted); }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: clamp(16px, 4vw, 28px); margin-top: 16px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    textarea, button, select { font: inherit; }
+    textarea { display: block; width: 100%; min-height: 220px; margin: 14px 0 10px; padding: 12px; resize: vertical; font-family: ui-monospace, monospace; }
+    textarea, select, .secondary { background: var(--background); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+    select, button { padding: 6px 12px; }
+    button { cursor: pointer; border: 1px solid transparent; border-radius: 8px; }
+    button:disabled { cursor: wait; opacity: .65; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .primary { background: var(--accent); color: #10271f; font-weight: 750; }
+    .action { margin-top: 16px; }
+    .error { color: #ffadad; }
+    #result { overflow-wrap: anywhere; }
+    #cause { white-space: pre-wrap; }
+    ul, ol { padding-left: 24px; margin: 4px 0; }
+    li { margin: 6px 0; }
+    code { white-space: pre-wrap; color: var(--accent); }
+    footer { font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">CI 诊断 · OTARI</p>
+      <h1>Build Triage</h1>
+      <p class="muted">从构建失败日志定位失败阶段、原始证据和下一步排查动作。</p>
+    </header>
+    <form id="form" class="panel">
+      <div class="row">
+        <h2><label for="log">CI 日志</label></h2>
+        <button id="sample" class="secondary" type="button">填入示例日志</button>
+      </div>
+      <textarea id="log" maxlength="16000" required spellcheck="false"
+        aria-describedby="privacy" placeholder="粘贴失败阶段及附近的 CI 日志…"></textarea>
+      <footer id="privacy" class="muted">点击分析会把日志发送给 Otari 和所选模型服务。请先移除密钥、内部地址等敏感信息。</footer>
+      <div class="row action">
+        <label for="language">诊断语言
+          <select id="language">
+            <option value="Simplified Chinese">简体中文</option>
+            <option value="English">English</option>
+          </select>
+        </label>
+        <button id="submit" class="primary" type="submit">分析日志</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+    </form>
+    <section id="result" class="panel" aria-labelledby="result-title" hidden>
+      <div class="row">
+        <h2 id="result-title">诊断结果</h2>
+        <span id="model" class="muted"></span>
+      </div>
+      <h3>失败阶段</h3>
+      <p id="stage"></p>
+      <h3>可能原因</h3>
+      <p id="cause"></p>
+      <h3>日志证据</h3>
+      <ul id="evidence"></ul>
+      <h3>排查动作</h3>
+      <ol id="steps"></ol>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById("form");
+    const log = document.getElementById("log");
+    const language = document.getElementById("language");
+    const sample = document.getElementById("sample");
+    const submit = document.getElementById("submit");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+
+    function setStatus(message, error = false) {
+      status.textContent = message;
+      status.classList.toggle("error", error);
+    }
+
+    function fillList(id, entries, tag) {
+      const items = entries.map((entry) => {
+        const item = document.createElement("li");
+        const text = document.createElement(tag);
+        text.textContent = entry;
+        item.append(text);
+        return item;
+      });
+      document.getElementById(id).replaceChildren(...items);
+    }
+
+    sample.addEventListener("click", async () => {
+      const previous = log.value;
+      if (previous.trim() && !window.confirm("用示例日志替换当前输入？")) return;
+      try {
+        const response = await fetch("/sample.log");
+        if (!response.ok) throw new Error();
+        const sampleText = await response.text();
+        if (submit.disabled || log.value !== previous) return;
+        log.value = sampleText;
+        result.hidden = true;
+        setStatus("");
+        log.focus();
+      } catch {
+        setStatus("无法加载示例日志。", true);
+      }
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (submit.disabled || !log.value.trim()) {
+        setStatus("请粘贴 CI 日志。", true);
+        return;
+      }
+      submit.disabled = true;
+      sample.disabled = true;
+      log.readOnly = true;
+      language.disabled = true;
+      result.hidden = true;
+      setStatus("正在通过 Otari 分析日志…");
+      try {
+        const response = await fetch("/api/diagnose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ log: log.value, language: language.value }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          setStatus(data.error || "分析失败，请重试。", true);
+          return;
+        }
+        document.getElementById("model").textContent = data.model;
+        document.getElementById("stage").textContent = data.stage;
+        document.getElementById("cause").textContent = data.cause;
+        const evidence = data.evidence.map(({ line, text }) => `第 ${line} 行 · ${text}`);
+        fillList("evidence", evidence.length ? evidence : ["日志中没有明确的证据行。"], "code");
+        fillList("steps", data.next_steps, "span");
+        result.hidden = false;
+        setStatus("诊断已完成。");
+        result.scrollIntoView({ block: "nearest" });
+      } catch {
+        setStatus("无法完成分析。请检查本地服务是否仍在运行。", true);
+      } finally {
+        submit.disabled = false;
+        sample.disabled = false;
+        log.readOnly = false;
+        language.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
