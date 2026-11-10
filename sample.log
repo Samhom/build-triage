@@ -1,0 +1,9 @@
+[09:31:10] Starting CI job: unit-tests
+[09:31:11] Running Maven verify with Java 21
+[INFO] Scanning for projects...
+[INFO] Building demo-checkout 1.0.0
+[INFO] Downloading: https://repo.example.org/releases/dev/demo/rules/1.2.0/rules-1.2.0.pom
+[ERROR] Failed to resolve dev.demo:rules:jar:1.2.0 from repository demo-releases
+[ERROR] GET rules-1.2.0.pom returned HTTP 401 Unauthorized
+[INFO] BUILD FAILURE
+[09:31:16] Job exited with status 1; unit tests were not run.
